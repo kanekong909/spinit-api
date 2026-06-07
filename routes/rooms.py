@@ -25,7 +25,8 @@ def verify_owner(room: Room, owner_id: str):
 @router.post("/", response_model=RoomOut, status_code=201)
 def create_room(data: RoomCreate, db: Session = Depends(get_db)):
     options = [o.strip() for o in data.options if o.strip()]
-    if len(options) < 2:
+    # Raffle mode sends a placeholder ['sorteo'] — only enforce min 2 for group mode
+    if data.mode == 'group' and len(options) < 2:
         raise HTTPException(status_code=400, detail="Mínimo 2 opciones")
     room = Room(
         name=data.name,
