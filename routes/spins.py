@@ -9,6 +9,20 @@ import random
 router = APIRouter(prefix="/rooms/{room_id}/spins", tags=["spins"])
 
 
+def _get_valid_options(room: Room, db: Session) -> list[str]:
+    """
+    Modo group  → opciones definidas por el admin (room.options)
+    Modo raffle → nombres de los jugadores online (la ruleta ES la lista de participantes)
+    """
+    if room.mode == "raffle":
+        players = db.query(Player).filter(
+            Player.room_id == room.id,
+            Player.is_online == True
+        ).order_by(Player.joined_at).all()
+        return [p.name for p in players]
+    return room.options
+
+
 @router.post("/{player_id}", response_model=SpinOut, status_code=201)
 async def submit_spin(
     room_id: str,
@@ -35,8 +49,10 @@ async def submit_spin(
     if existing:
         raise HTTPException(status_code=409, detail="Ya giraste en esta ronda")
 
-    if data.result not in room.options:
-        raise HTTPException(status_code=400, detail="Opción inválida")
+    # Validate against correct options for the mode
+    valid_options = _get_valid_options(room, db)
+    if data.result not in valid_options:
+        raise HTTPException(status_code=400, detail=f"Opción inválida: '{data.result}'")
 
     spins_so_far = db.query(Spin).filter(
         Spin.room_id == room_id,
@@ -56,7 +72,6 @@ async def submit_spin(
 
     await manager.broadcast_all(room_id, player_spun_event(player_id, spin.spin_order))
 
-    # Check if all online players have spun
     online_count = db.query(Player).filter(
         Player.room_id == room_id, Player.is_online == True
     ).count()
@@ -66,7 +81,7 @@ async def submit_spin(
     ).count()
 
     if spun_count >= online_count:
-        result = _calculate_result(db, room_id, room.round_number, room.mode)
+        result = _calculate_result(db, room_id, room.round_number, room.mode, valid_options)
         room.status = "revealing"
         db.commit()
         await manager.broadcast_all(room_id, round_result_event(result.model_dump()))
@@ -74,46 +89,72 @@ async def submit_spin(
     return spin
 
 
-def _calculate_result(db: Session, room_id: str, round_number: int, mode: str = "group") -> RoundResult:
+def _calculate_result(
+    db: Session,
+    room_id: str,
+    round_number: int,
+    mode: str = "group",
+    valid_options: list = None
+) -> RoundResult:
     spins = db.query(Spin).filter(
         Spin.room_id == room_id,
         Spin.round_number == round_number
     ).all()
 
-    # Count votes per option
+    # Map: sector_name → list of spins that landed there
     votes: dict[str, list] = {}
     for spin in spins:
         votes.setdefault(spin.result, [])
         votes[spin.result].append(spin)
 
     vote_counts = {opt: len(lst) for opt, lst in votes.items()}
-    max_votes = max(vote_counts.values())
-    tied_options = [opt for opt, count in vote_counts.items() if count == max_votes]
-    tiebreak_applied = len(tied_options) > 1
 
-    # Winning option (random among tied)
-    winning_option = random.choice(tied_options)
-
-    # --- Raffle mode: pick an individual winner ---
-    raffle_winner_id = None
-    raffle_winner_name = None
-    raffle_winner_avatar_style = None
-    raffle_winner_avatar_seed = None
-    raffle_tiebreak = False
-
+    # ── RAFFLE MODE ──────────────────────────────────────────────────────────
+    # The wheel sectors ARE the player names.
+    # Logic: system picks a random winning sector → the player who landed there wins.
+    # If nobody landed on the chosen sector, pick from sectors that DID get votes.
     if mode == "raffle":
-        # Players who landed on the winning option
-        winning_spins = votes.get(winning_option, [])
-        raffle_tiebreak = len(winning_spins) > 1
+        all_sectors = valid_options or list(votes.keys())
 
+        # Try a random sector; if empty, fall back to sectors with votes
+        chosen_sector = random.choice(all_sectors)
+        if chosen_sector not in votes or not votes[chosen_sector]:
+            # Fall back: pick from sectors that actually got votes
+            sectors_with_votes = [s for s in all_sectors if s in votes and votes[s]]
+            chosen_sector = random.choice(sectors_with_votes) if sectors_with_votes else random.choice(all_sectors)
+
+        winning_spins  = votes.get(chosen_sector, [])
+        raffle_tiebreak = len(winning_spins) > 1  # multiple players landed on same sector
+
+        raffle_winner_id = raffle_winner_name = raffle_winner_avatar_style = raffle_winner_avatar_seed = None
         if winning_spins:
-            chosen_spin = random.choice(winning_spins)
+            chosen_spin   = random.choice(winning_spins)
             winner_player = db.query(Player).filter(Player.id == chosen_spin.player_id).first()
             if winner_player:
-                raffle_winner_id = winner_player.id
-                raffle_winner_name = winner_player.name
+                raffle_winner_id           = winner_player.id
+                raffle_winner_name         = winner_player.name
                 raffle_winner_avatar_style = winner_player.avatar_style
-                raffle_winner_avatar_seed = winner_player.avatar_seed
+                raffle_winner_avatar_seed  = winner_player.avatar_seed
+
+        return RoundResult(
+            winner=chosen_sector,          # the winning sector (a player name)
+            vote_count=len(winning_spins),
+            total_players=len(spins),
+            tiebreak_applied=False,        # not applicable in raffle
+            all_votes=vote_counts,
+            raffle_winner_id=raffle_winner_id,
+            raffle_winner_name=raffle_winner_name,
+            raffle_winner_avatar_style=raffle_winner_avatar_style,
+            raffle_winner_avatar_seed=raffle_winner_avatar_seed,
+            raffle_tiebreak=raffle_tiebreak,
+        )
+
+    # ── GROUP MODE ────────────────────────────────────────────────────────────
+    # Most-voted option wins; random tiebreak.
+    max_votes     = max(vote_counts.values())
+    tied_options  = [opt for opt, count in vote_counts.items() if count == max_votes]
+    tiebreak_applied = len(tied_options) > 1
+    winning_option   = random.choice(tied_options)
 
     return RoundResult(
         winner=winning_option,
@@ -121,11 +162,11 @@ def _calculate_result(db: Session, room_id: str, round_number: int, mode: str = 
         total_players=len(spins),
         tiebreak_applied=tiebreak_applied,
         all_votes=vote_counts,
-        raffle_winner_id=raffle_winner_id,
-        raffle_winner_name=raffle_winner_name,
-        raffle_winner_avatar_style=raffle_winner_avatar_style,
-        raffle_winner_avatar_seed=raffle_winner_avatar_seed,
-        raffle_tiebreak=raffle_tiebreak,
+        raffle_winner_id=None,
+        raffle_winner_name=None,
+        raffle_winner_avatar_style=None,
+        raffle_winner_avatar_seed=None,
+        raffle_tiebreak=False,
     )
 
 
@@ -137,7 +178,8 @@ def get_round_result(room_id: str, round_number: int = None, db: Session = Depen
     if room.status not in ("revealing", "done"):
         raise HTTPException(status_code=400, detail="Resultados aún no disponibles")
     rn = round_number or room.round_number
-    return _calculate_result(db, room_id, rn, room.mode)
+    valid = _get_valid_options(room, db)
+    return _calculate_result(db, room_id, rn, room.mode, valid)
 
 
 @router.get("/", response_model=list[SpinOut])

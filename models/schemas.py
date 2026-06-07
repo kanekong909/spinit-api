@@ -7,7 +7,7 @@ from datetime import datetime
 
 class RoomCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
-    options: List[str] = Field(..., min_length=2, max_length=8)
+    options: List[str] = Field(..., min_length=1, max_length=8)
     is_permanent: bool = False
     owner_id: Optional[str] = None  # player_id del creador
     mode: str = Field(default='group', pattern='^(group|raffle)$')
