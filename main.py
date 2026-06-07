@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from models.database import init_db, engine
 from routes.rooms import router as rooms_router
 from routes.players import router as players_router
@@ -12,6 +13,9 @@ app = FastAPI(
     description="API para el juego de ruleta grupal",
     version="1.0.0",
 )
+
+# Trust Railway's reverse proxy so WebSocket upgrades work correctly
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Support comma-separated list of allowed origins, e.g. "https://a.railway.app,https://custom.com"
 _raw_origins = os.getenv("FRONTEND_URL", "http://localhost:5173")
