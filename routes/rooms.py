@@ -24,14 +24,9 @@ def verify_owner(room: Room, owner_id: str):
 # --- Create room (anyone) ---
 @router.post("/", response_model=RoomOut, status_code=201)
 def create_room(data: RoomCreate, db: Session = Depends(get_db)):
-    # Para modo raffle, no necesitamos opciones
-    if data.mode == "raffle":
-        options = ["sorteo"]  # Valor placeholder
-    else:
-        options = [o.strip() for o in data.options if o.strip()]
-        if len(options) < 2:
-            raise HTTPException(status_code=400, detail="Mínimo 2 opciones")
-    
+    options = [o.strip() for o in data.options if o.strip()]
+    if len(options) < 2:
+        raise HTTPException(status_code=400, detail="Mínimo 2 opciones")
     room = Room(
         name=data.name,
         options=options[:8],
@@ -115,7 +110,8 @@ async def change_status(room_id: str, data: RoomStatusChange, db: Session = Depe
 
 
 # --- Delete room (owner only) ---
-@router.delete("/{room_id}", status_code=204)
+# Using POST /delete instead of DELETE to avoid body-in-DELETE issues with some proxies
+@router.post("/{room_id}/delete", status_code=204)
 def delete_room(room_id: str, data: AdminAction, db: Session = Depends(get_db)):
     room = db.query(Room).filter(Room.id == room_id).first()
     if not room:
