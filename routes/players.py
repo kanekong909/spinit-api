@@ -16,15 +16,32 @@ async def join_room(room_id: str, data: PlayerJoin, db: Session = Depends(get_db
     if room.status == "done":
         raise HTTPException(status_code=400, detail="Esta sala ya terminó")
 
-    # Prevent duplicate names in same room
+    # Check if player with this name already exists in the room (online or offline)
     existing = db.query(Player).filter(
         Player.room_id == room_id,
         Player.name == data.name,
-        Player.is_online == True
     ).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Ya hay un jugador con ese nombre en esta sala")
 
+    if existing:
+        if existing.is_online:
+            # Someone else is already connected with this name
+            raise HTTPException(status_code=409, detail="Ya hay un jugador conectado con ese nombre")
+        # Returning player — mark online and update avatar in case they changed it
+        existing.is_online = True
+        existing.avatar_style = data.avatar_style
+        existing.avatar_seed = data.avatar_seed
+        db.commit()
+        db.refresh(existing)
+        await manager.broadcast_all(room_id, player_joined_event({
+            "id": existing.id,
+            "name": existing.name,
+            "avatar_style": existing.avatar_style,
+            "avatar_seed": existing.avatar_seed,
+            "is_online": True,
+        }))
+        return existing
+
+    # New player
     player = Player(
         room_id=room_id,
         name=data.name,
