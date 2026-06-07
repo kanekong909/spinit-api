@@ -13,11 +13,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+# Support comma-separated list of allowed origins, e.g. "https://a.railway.app,https://custom.com"
+_raw_origins = os.getenv("FRONTEND_URL", "http://localhost:5173")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+ALLOWED_ORIGINS += ["http://localhost:5173", "http://localhost:4173"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:5173", "http://localhost:4173"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://.*\.up\.railway\.app",  # all Railway subdomains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
