@@ -38,16 +38,26 @@ app.include_router(ws_router)
 
 
 @app.on_event("startup")
-def on_startup():
-    init_db()
-    # Safe column migrations — idempotent, safe to run every restart
-    from sqlalchemy import text
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS owner_id VARCHAR"))
-        conn.execute(text("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS mode VARCHAR DEFAULT 'group'"))
-        conn.execute(text("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS prize VARCHAR(120)"))
-        conn.commit()
-    print("✅ Base de datos lista")
+async def on_startup():
+    import asyncio
+    # Retry DB connection — Railway postgres can take a few seconds to be ready
+    for attempt in range(5):
+        try:
+            init_db()
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS owner_id VARCHAR"))
+                conn.execute(text("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS mode VARCHAR DEFAULT 'group'"))
+                conn.execute(text("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS prize VARCHAR(120)"))
+                conn.commit()
+            print("✅ Base de datos lista")
+            return
+        except Exception as e:
+            print(f"⚠️ DB not ready (attempt {attempt+1}/5): {e}")
+            if attempt < 4:
+                await asyncio.sleep(2)
+            else:
+                print("❌ Could not connect to DB — continuing anyway")
 
 
 @app.get("/health")
