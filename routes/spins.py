@@ -51,8 +51,18 @@ async def submit_spin(
 
     # Validate against correct options for the mode
     valid_options = _get_valid_options(room, db)
-    if data.result not in valid_options:
-        raise HTTPException(status_code=400, detail=f"Opción inválida: '{data.result}'")
+
+    if room.mode == "raffle":
+        # In raffle mode, valid results are player names — also accept the spinning player's own name
+        # This is more permissive to handle race conditions between frontend/backend player lists
+        all_player_names = [p.name for p in db.query(Player).filter(
+            Player.room_id == room_id, Player.is_online == True
+        ).all()]
+        if data.result not in all_player_names:
+            raise HTTPException(status_code=400, detail=f"El sector '{data.result}' no corresponde a ningún jugador en la sala")
+    else:
+        if data.result not in valid_options:
+            raise HTTPException(status_code=400, detail=f"Opción inválida: '{data.result}'. Opciones válidas: {valid_options}")
 
     spins_so_far = db.query(Spin).filter(
         Spin.room_id == room_id,
