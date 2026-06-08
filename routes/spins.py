@@ -53,10 +53,9 @@ async def submit_spin(
     valid_options = _get_valid_options(room, db)
 
     if room.mode == "raffle":
-        # In raffle mode, valid results are player names — also accept the spinning player's own name
-        # This is more permissive to handle race conditions between frontend/backend player lists
+        # In raffle mode, valid results are any player name in the room
         all_player_names = [p.name for p in db.query(Player).filter(
-            Player.room_id == room_id, Player.is_online == True
+            Player.room_id == room_id
         ).all()]
         if data.result not in all_player_names:
             raise HTTPException(status_code=400, detail=f"El sector '{data.result}' no corresponde a ningún jugador en la sala")
