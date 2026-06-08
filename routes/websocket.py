@@ -25,6 +25,10 @@ async def websocket_endpoint(
         await websocket.close(code=4004)
         return
 
+    # Mark player as online before sending init state
+    player.is_online = True
+    db.commit()
+
     await manager.connect(websocket, room_id, player_id)
 
     # Send current state immediately on connect
@@ -44,6 +48,8 @@ async def websocket_endpoint(
             "options": room.options,
             "status": room.status,
             "round_number": room.round_number,
+            "mode": room.mode,
+            "prize": room.prize,
         },
         "players": [
             {
@@ -51,7 +57,8 @@ async def websocket_endpoint(
                 "name": p.name,
                 "avatar_style": p.avatar_style,
                 "avatar_seed": p.avatar_seed,
-                "is_online": p.is_online,
+                # Force connecting player as online regardless of DB state timing
+                "is_online": True if p.id == player_id else p.is_online,
                 "has_spun": p.id in spun_player_ids,
             }
             for p in players
